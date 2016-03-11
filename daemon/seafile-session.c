@@ -206,6 +206,53 @@ seafile_session_init (SeafileSession *session)
 {
 }
 
+static void
+load_system_proxy (SeafileSession *session)
+{
+    char *system_proxy_txt = g_build_filename (seaf->seaf_dir, "system-proxy.txt", NULL);
+    json_t *json = NULL;
+    gboolean proxy_parsed = FALSE;
+    if (!g_file_test (system_proxy_txt, G_FILE_TEST_EXISTS)) {
+        seaf_warning ("Can't load system proxy: file %s doesn't exist\n", system_proxy_txt);
+        goto out;
+    }
+
+    json_error_t jerror;
+    json = json_load_file(system_proxy_txt, 0, &jerror);
+    if (!json) {
+        if (strlen(jerror.text) > 0)
+            seaf_warning ("Failed to load system proxy information: %s.\n", jerror.text);
+        else
+            seaf_warning ("Failed to load system proxy information\n");
+        goto out;
+    }
+    const char *type;
+    type = json_object_get_string_member (json, "type");
+    if (!type) {
+        seaf_warning ("Failed to load system proxy information: proxy type missing\n");
+        goto out;
+    }
+    if (strcmp(type, "none") != 0 && strcmp(type, "socks") != 0 && strcmp(type, "http") != 0) {
+        seaf_warning ("Failed to load system proxy information: invalid proxy type %s\n", type);
+        goto out;
+    }
+    if (g_strcmp0(type, "none") == 0) {
+        goto out;
+    }
+    proxy_parsed = TRUE;
+    session->http_proxy_type = g_strdup(type);
+    session->http_proxy_addr = g_strdup(json_object_get_string_member (json, "addr"));
+    session->http_proxy_port = json_object_get_int_member (json, "port");
+    session->http_proxy_username = g_strdup(json_object_get_string_member (json, "username"));
+    session->http_proxy_password = g_strdup(json_object_get_string_member (json, "password"));
+
+out:
+    session->use_http_proxy = proxy_parsed;
+    g_free (system_proxy_txt);
+    if (json)
+        json_decref(json);
+}
+
 void
 seafile_session_prepare (SeafileSession *session)
 {
@@ -223,14 +270,19 @@ seafile_session_prepare (SeafileSession *session)
         (session, KEY_USE_PROXY);
     session->http_proxy_type = seafile_session_config_get_string
         (session, KEY_PROXY_TYPE);
-    session->http_proxy_addr = seafile_session_config_get_string
-        (session, KEY_PROXY_ADDR);
-    session->http_proxy_port = seafile_session_config_get_int
-        (session, KEY_PROXY_PORT, NULL);
-    session->http_proxy_username = seafile_session_config_get_string
-        (session, KEY_PROXY_USERNAME);
-    session->http_proxy_password = seafile_session_config_get_string
-        (session, KEY_PROXY_PASSWORD);
+
+    if (g_strcmp0(session->http_proxy_type, "system") == 0) {
+        load_system_proxy(session);
+    } else {
+        session->http_proxy_addr = seafile_session_config_get_string
+            (session, KEY_PROXY_ADDR);
+        session->http_proxy_port = seafile_session_config_get_int
+            (session, KEY_PROXY_PORT, NULL);
+        session->http_proxy_username = seafile_session_config_get_string
+            (session, KEY_PROXY_USERNAME);
+        session->http_proxy_password = seafile_session_config_get_string
+            (session, KEY_PROXY_PASSWORD);
+    }
 
     /* Start mq manager earlier, so that we can send notifications
      * when start repo manager. */
